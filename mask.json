@@ -1,0 +1,27 @@
+[
+    {
+        "data_type": "name",
+        "clear_text": "RAG",
+        "uuid": "4d026f91-061d-48f3-ad88-1dd1e3dcc87a"
+    },
+    {
+        "data_type": "LLM",
+        "clear_text": "4111 1111 1111 1111",
+        "uuid": "1bf61764-9710-4fde-a610-3167659fa63e"
+    },
+    {
+        "data_type": "email",
+        "clear_text": "johndoe@example.com",
+        "uuid": "7e6e3d22-0e59-4f9e-bae3-4c9d3f0aeb08"
+    },
+    {
+        "data_type": "query",
+        "clear_text": "+1-234-567-8900",
+        "uuid": "0a74f24d-b5a6-4d2b-b848-5793c0b2eefd"
+    },
+    {
+        "data_type": "address",
+        "clear_text": "123 Main St, Anytown, USA",
+        "uuid": "9c2b8b8e-8b9e-4c8e-91d6-9e3f3b0e7f63"
+    }
+]
