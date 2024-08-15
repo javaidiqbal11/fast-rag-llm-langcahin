@@ -1,4 +1,4 @@
-# fast-rag-llm-langcahin
+# Fast RAG LLM LangCahin
 
 
 ## Overview
