@@ -67,3 +67,30 @@ uvicorn main:app --reload
 
 Open your web browser and navigate to http://127.0.0.1:8000/docs to explore the API documentation and test endpoints.
 
+
+
+## Adaptive RAG
+
+### Embedding Based Testing: 
+There are some test cases performed based on the different embedding approaches:
+1. Test Case 1:
+**(Bge-small-en)**
+It performs best on Adaptive RAG for the responses retrieved from the Vector store database. 
+It couldn’t best perform if the content is not found in the vector store and provided only a web link. 
+
+2. Test Case 2:
+**(gte-base)**
+It performs best on Adaptive RAG for the responses retrieved from the Vector store database. 
+Best perform if the content is not found in the vector store and provided a response from a web link. 
+But it couldn’t respond for the 2024 year if the content is not available in the vector store
+
+3. Test Case 3: 
+**(OpenAI)**
+It is not available open-source and couldn’t be tested without purchasing an embedding model. 
+
+4. Test Case 4: 
+**(Mistral-7B)**
+It performs best on Adaptive RAG for the responses retrieved from the Vector store database. 
+Best perform if the content is not found in the vector store and provided a response from a web link.
+It’s very slow even fetching from the vector store (High response time)
+
