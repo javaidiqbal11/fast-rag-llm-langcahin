@@ -8,8 +8,7 @@ from typing import List, Optional
 import openai
 from datetime import datetime
 from langchain_openai import OpenAI
-from langchain.storage import InMemoryByteStore
-from langchain_openai import OpenAIEmbeddings
+from langchain.storage import InMemoryByteStorefrom langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import CharacterTextSplitter

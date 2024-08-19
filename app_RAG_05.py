@@ -1,3 +1,5 @@
+## Tested RAGs and not worked with VectorStoreRetriever 
+
 import os
 import logging
 from fastapi import FastAPI, UploadFile, HTTPException, File, Form
@@ -33,7 +35,6 @@ from concurrent.futures import ThreadPoolExecutor
 from huggingface_hub import login
 import tempfile
 import json
-import requests
 
 # Load environment variables
 load_dotenv()
@@ -42,8 +43,6 @@ load_dotenv()
 QDRANT_DIR = "./Qdrant"
 EMBEDDING_MAPPING_FILE = "embedding_mapping.json"
 api_key = os.getenv("OPENAI_API_KEY")
-google_api_key = os.getenv("GOOGLE_API_KEY")
-google_cx = os.getenv("GOOGLE_CX")  # Custom Search Engine ID for Google Search API
 openai.api_key = api_key
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,7 +79,11 @@ class Device(str, Enum):
     GPU = "cuda"
 
 class RAGType(str, Enum):
-    ADAPTIVE_RAG = "Adaptive RAG"
+    RAG_SEQUENCE = "RAG Sequence"
+    RAG_CHAIN = "RAG Chain"
+    RAG_MULTISTEP = "RAG Multistep"
+    RAG_SUMMARIZER = "RAG Summarizer"
+    RAG_CONDITIONAL = "RAG Conditional"
 
 class Model(str, Enum):
     Mixtral_7B = "Mixtral 7B"
@@ -101,6 +104,10 @@ class EmbedMethod(str, Enum):
     openai = "OpenAI"
     Mistral_7B = "Mistral-7B"
     Cohere_7B = "Cohere-7B"
+
+class PreProcessing(str, Enum):
+    Nothing = " "
+    MULTI_QUERY = "Multi Query"
 
 class PostProcessing(str, Enum):
     LONG_CONTEXT_REORDER = "Long-Context Reorder"
@@ -158,8 +165,6 @@ def get_embeddings(embed_method, device: Device):
         emb = "Salesforce/SFR-Embedding-Mistral"
     elif embed_method == EmbedMethod.Cohere_7B:
         emb = "Cohere/Cohere-embed-multilingual-v3.0"
-    elif embed_method == EmbedMethod.openai:
-        emb = "text-embedding-ada-002"
     
     login(token=os.environ['HUGGINGFACEHUB_API_TOKEN'])
     embeddings = HuggingFaceEmbeddings(
@@ -172,63 +177,62 @@ def get_embeddings(embed_method, device: Device):
 
     return embeddings
 
-# Define EnhancedContextRetriever for this context
-class EnhancedContextRetriever:
-    def __init__(self, base_retriever, additional_context):
-        self.base_retriever = base_retriever
-        self.additional_context = additional_context
-
+class BaseRetriever:
     def invoke(self, query):
-        # Enhance the query with additional context
-        enriched_query = f"{query} with context: {self.additional_context}"
-        # Retrieve the documents
-        return self.base_retriever.invoke(enriched_query)
+        raise NotImplementedError("This method should be overridden in subclasses.")
 
-class AdaptiveRAGRetriever:
-    def __init__(self, retrievers, strategy_selector):
+class RAGSequenceRetriever(BaseRetriever):
+    def __init__(self, retrievers):
         self.retrievers = retrievers
-        self.strategy_selector = strategy_selector
 
     def invoke(self, query):
-        strategy = self.strategy_selector(query)
-        return self.retrievers[strategy].invoke(query)
+        results = []
+        for retriever in self.retrievers:
+            results.extend(retriever.invoke(query))
+        return results
 
-def adaptive_strategy_selector(query):
-    # Example logic to select strategy based on query characteristics
-    if len(query) > 100:
-        return "MultiQueryRetriever"
-    elif "technical" in query:
-        return "EnhancedContextRetriever"
-    else:
-        return "Normal RAG"
+class RAGChainRetriever(BaseRetriever):
+    def __init__(self, retrievers):
+        self.retrievers = retrievers
 
-# Relevance check function
-def is_query_relevant(docs, threshold=0.1):
-    total_length = sum(len(doc.page_content) for doc in docs)
-    relevant_content_length = sum(len(doc.page_content) for doc in docs if len(doc.page_content) > 50)  # Assuming relevant docs have more than 50 characters of content
-    relevance_ratio = relevant_content_length / total_length if total_length > 0 else 0
-    return relevance_ratio >= threshold
+    def invoke(self, query):
+        results = []
+        for retriever in self.retrievers:
+            chain_result = retriever.invoke(query)
+            results.extend(chain_result)
+        return results
 
-# Function to search the web if the query is irrelevant
-def search_web(query):
-    search_url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={google_api_key}&cx={google_cx}"
-    response = requests.get(search_url)
-    data = response.json()
-    if "items" in data:
-        top_result = data["items"][0]
-        title = top_result.get("title", "No title")
-        snippet = top_result.get("snippet", "No snippet")
-        link = top_result.get("link", "")
-        return title, snippet, link
-    else:
-        return None, None, "https://www.google.com/search?q=" + query
+class RAGMultistepRetriever(BaseRetriever):
+    def __init__(self, retrievers):
+        self.retrievers = retrievers
 
-# Function to generate a response using GPT model
-def generate_response_with_gpt(context, query):
-    llm = ChatOpenAI(model="gpt-4o", temperature=0.01)
-    prompt = f"Based on the following information:\n{context}\n\nPlease provide a detailed and logical response to the query: {query}."
-    response = llm([HumanMessage(content=prompt)]).content
-    return response
+    def invoke(self, query):
+        results = []
+        for step, retriever in enumerate(self.retrievers):
+            step_result = retriever.invoke(f"Step {step+1}: {query}")
+            results.extend(step_result)
+        return results
+
+class RAGSummarizerRetriever(BaseRetriever):
+    def __init__(self, retriever, summarizer):
+        self.retriever = retriever
+        self.summarizer = summarizer
+
+    def invoke(self, query):
+        results = self.retriever.invoke(query)
+        summary = self.summarizer([HumanMessage(content=f"Summarize the following: {results}")]).content
+        return [summary]
+
+class RAGConditionalRetriever(BaseRetriever):
+    def __init__(self, retrievers, condition):
+        self.retrievers = retrievers
+        self.condition = condition
+
+    def invoke(self, query):
+        if self.condition(query):
+            return self.retrievers[0].invoke(query)
+        else:
+            return self.retrievers[1].invoke(query)
 
 # Main endpoints
 @app.post("/ingest")
@@ -292,6 +296,7 @@ async def ingest(method: ChunkingMethod = Form(...), embed_method: EmbedMethod =
 async def retrieval(
     RAG_Type: RAGType = Form(..., description="Select the RAG type"),
     PostProcessing: PostProcessing = Form(..., description="Select the PostProcessing type"),
+    PreProcessing: PreProcessing = Form(..., description="Select the PreProcessing type"),
     query: str = Form(...),
     k: int = Form(...),
     collection: str = Form(..., description="Select an existing collection"),
@@ -303,57 +308,70 @@ async def retrieval(
 
     print('Query: ', query)
 
-    # Adaptive strategy for retrieval
-    retrievers = {
-        "Normal RAG": vectorstore.as_retriever(search_kwargs={"k": k}),
-        "MultiQueryRetriever": MultiQueryRetriever.from_llm(
-            retriever=vectorstore.as_retriever(search_kwargs={"k": k}), llm=ChatOpenAI(model="gpt-4o")
-        ),
-        "EnhancedContextRetriever": EnhancedContextRetriever(
-            base_retriever=vectorstore.as_retriever(search_kwargs={"k": k}), additional_context="Provide extra details on machine learning models."
-        ),
-    }
-    adaptive_retriever = AdaptiveRAGRetriever(retrievers, adaptive_strategy_selector)
+    prompts = []
+    if PreProcessing == PreProcessing.MULTI_QUERY:
+        llm = ChatOpenAI(model="gpt-4o")
+        response = llm([HumanMessage(content="Generate five different versions of the given user question to retrieve relevant documents from a vector database.\nOriginal question: " + query)])
+        prompts = response.content.split('\n')
 
-    # Retrieve documents
-    docs = adaptive_retriever.invoke(query)
+    prompts.append(query)
 
-    # Check for relevance of the documents
-    if not is_query_relevant(docs):
-        title, snippet, web_link = search_web(query)
-        if title and snippet:
-            # Generate a response using the snippet and provide the link
-            response_text = generate_response_with_gpt(snippet, query)
-            return {
-                "response": response_text,
-                "link": web_link
-            }
-        else:
-            return {
-                "response": "No relevant information found in the documents or on the web.",
-                "link": web_link
-            }
+    retriever = None
+
+    if RAG_Type == RAGType.RAG_SEQUENCE:
+        retrievers = [
+            vectorstore.as_retriever(search_kwargs={"k": k}),
+            vectorstore.as_retriever(search_kwargs={"k": k})
+        ]
+        retriever = RAGSequenceRetriever(retrievers=retrievers)
+    elif RAG_Type == RAGType.RAG_CHAIN:
+        retrievers = [
+            vectorstore.as_retriever(search_kwargs={"k": k}),
+            vectorstore.as_retriever(search_kwargs={"k": k})
+        ]
+        retriever = RAGChainRetriever(retrievers=retrievers)
+    elif RAG_Type == RAGType.RAG_MULTISTEP:
+        retrievers = [
+            vectorstore.as_retriever(search_kwargs={"k": k}),
+            vectorstore.as_retriever(search_kwargs={"k": k})
+        ]
+        retriever = RAGMultistepRetriever(retrievers=retrievers)
+    elif RAG_Type == RAGType.RAG_SUMMARIZER:
+        llm = ChatOpenAI(model="gpt-4o", temperature=0.01)
+        retriever = RAGSummarizerRetriever(vectorstore.as_retriever(search_kwargs={"k": k}), llm)
+    elif RAG_Type == RAGType.RAG_CONDITIONAL:
+        def condition(query):
+            # Example condition logic
+            return "important" in query.lower()
+        retrievers = [
+            vectorstore.as_retriever(search_kwargs={"k": k}),
+            vectorstore.as_retriever(search_kwargs={"k": k})
+        ]
+        retriever = RAGConditionalRetriever(retrievers=retrievers, condition=condition)
+
+    if retriever is None:
+        return JSONResponse(status_code=400, content={"message": "Failed to initialize retriever for the selected RAG type."})
+
+    query = prompts[0]
+    Final_Docs = retriever.invoke(query)
+    for query in prompts[1:]:
+        docs = retriever.invoke(query)
+        for doc in docs:
+            Final_Docs.append(doc)
 
     if PostProcessing == PostProcessing.LONG_CONTEXT_REORDER:
         reordering = LongContextReorder()
-        docs = reordering.transform_documents(docs)
+        Final_Docs = reordering.transform_documents(Final_Docs)
     elif PostProcessing == PostProcessing.Time_Sort:
-        docs = sorted(docs, key=parse_timestamp, reverse=True)
+        Final_Docs = sorted(Final_Docs, key=parse_timestamp, reverse=True)
     
-    # Generate response using GPT based on retrieved documents
-    combined_docs = " ".join([doc.page_content for doc in docs])
-    response_text = generate_response_with_gpt(combined_docs, query)
-    
-    return {"response": response_text, "link": None}
+    return Final_Docs
 
 @app.post("/query_chat_gpt")
-async def get_response(RAG_Type: RAGType, PostProcessing: PostProcessing, query: str, k: int, temperature: float = 0.01, collection: str = None, date: str = datetime.now().isoformat(), time: str = "00:00:00"):
+async def get_response(RAG_Type: RAGType, PostProcessing: PostProcessing, PreProcessing: PreProcessing, query: str, k: int, temperature: float = 0.01, collection: str = None, date: str = datetime.now().isoformat(), time: str = "00:00:00"):
     try:
-        docs = await retrieval(RAG_Type=RAG_Type, PostProcessing=PostProcessing, query=query, k=k, collection=collection)
+        docs = await retrieval(RAG_Type, PostProcessing, PreProcessing, query, k, collection)
         print('Docs Retrieved')
-
-        if isinstance(docs, dict):  # Check if the response came from the web search fallback
-            return docs
 
         # Combine the content of the retrieved documents
         combined_docs = " ".join([doc.page_content for doc in docs])
@@ -363,10 +381,9 @@ async def get_response(RAG_Type: RAGType, PostProcessing: PostProcessing, query:
         prompt = f"Based on the following information:\n{combined_docs}\n\nPlease provide a detailed and logical response to the query: {query}."
         response = llm([HumanMessage(content=prompt)]).content
 
-        return {"response": response, "link": None}
+        return response
     except Exception as e:
         print(e)
-        return {"response": "An error occurred while processing the query.", "link": None}
 
 def get_model(model: Model, temp: float, device: Device):
     device_id = -1 if device == Device.CPU else 0
@@ -408,12 +425,9 @@ def get_model(model: Model, temp: float, device: Device):
     return llm
 
 @app.post("/query_local_llm")
-async def get_response(Model_Type: Model, RAG_Type: RAGType, PostProcessing: PostProcessing, query: str, k: int, temperature: float = 0.01, collection: str = None, date: str = datetime.now().isoformat(), time: str = "00:00:00", device: Device = Device.CPU):
+async def get_response(Model_Type: Model, RAG_Type: RAGType, PostProcessing: PostProcessing, PreProcessing: PreProcessing, query: str, k: int, temperature: float = 0.01, collection: str = None, date: str = datetime.now().isoformat(), time: str = "00:00:00", device: Device = Device.CPU):
     try:
-        docs = await retrieval(RAG_Type=RAG_Type, PostProcessing=PostProcessing, query=query, k=k, collection=collection)
-
-        if isinstance(docs, dict):  # Check if the response came from the web search fallback
-            return docs
+        docs = await retrieval(RAG_Type, PostProcessing, PreProcessing, query, k, collection)
 
         print("Masked Query: ", query)
 
@@ -443,11 +457,10 @@ async def get_response(Model_Type: Model, RAG_Type: RAGType, PostProcessing: Pos
         result = chain.run(input_documents=docs, query=query, date=date, time=time)
         
         print(result)
-        return {"response": result, "link": None}
+        return result
 
     except Exception as e:
         print(e)
-        return {"response": "An error occurred while processing the query.", "link": None}
 
 @app.get("/list_collections", response_model=List[str])
 async def list_collections():
